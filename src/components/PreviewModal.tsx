@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react'
 import { XMarkIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline'
-import { FileObject } from '../services/fileService'
+import { FileObject, getPresignedDownloadUrl } from '../services/fileService'
 import { isImageFile, isVideoFile, isAudioFile, isTextFile, formatFileSize, formatDateTime } from '../utils/formatters'
 
 interface PreviewModalProps {
   file: FileObject | null
+  bucket: string
   onClose: () => void
 }
 
-const PreviewModal = ({ file, onClose }: PreviewModalProps) => {
+const PreviewModal = ({ file, bucket, onClose }: PreviewModalProps) => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -21,12 +22,8 @@ const PreviewModal = ({ file, onClose }: PreviewModalProps) => {
       setError(null)
 
       try {
-        // In a real implementation, you'd get a presigned URL for the file
-        // For now, we'll simulate it
-        const credentials = JSON.parse(localStorage.getItem('minio-credentials') || '{}')
-        const protocol = credentials.useSSL ? 'https' : 'http'
-        const url = `${protocol}://${credentials.endpoint}:${credentials.port}/${file.key}`
-
+        // Generate a presigned URL for secure access to the object
+        const url = await getPresignedDownloadUrl(bucket, file.key)
         setPreviewUrl(url)
       } catch (err) {
         setError('Failed to load preview')
@@ -40,14 +37,17 @@ const PreviewModal = ({ file, onClose }: PreviewModalProps) => {
 
   if (!file) return null
 
-  const handleDownload = () => {
-    if (previewUrl) {
+  const handleDownload = async () => {
+    try {
+      const downloadUrl = await getPresignedDownloadUrl(bucket, file.key)
       const link = document.createElement('a')
-      link.href = previewUrl
+      link.href = downloadUrl
       link.download = file.name
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
+    } catch (error) {
+      console.error('Failed to generate download URL:', error)
     }
   }
 

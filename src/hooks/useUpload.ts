@@ -14,7 +14,8 @@ export const useUpload = () => {
   return useMutation({
     mutationFn: async ({ bucket, files, path = '' }: UploadParams) => {
       const uploadPromises = files.map(async (file) => {
-        const fileKey = path ? `${path}${file.name}` : file.name
+        const relativePath = (file as any).webkitRelativePath || file.name
+        const fileKey = path ? `${path}${relativePath}` : relativePath
 
         try {
           await uploadFile(bucket, fileKey, file)

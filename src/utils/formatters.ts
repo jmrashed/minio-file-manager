@@ -94,3 +94,15 @@ export const isTextFile = (fileName: string): boolean => {
   const extension = fileName.split('.').pop()?.toLowerCase()
   return extension ? textExtensions.includes(extension) : false
 }
+
+export const getFileType = (fileName: string, type: string): string => {
+  if (type === 'folder') return 'folder'
+  const ext = fileName.split('.').pop()?.toLowerCase() || ''
+  if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(ext)) return 'image'
+  if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm'].includes(ext)) return 'video'
+  if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'wma'].includes(ext)) return 'audio'
+  if (['pdf', 'doc', 'docx', 'txt', 'rtf', 'odt', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext)) return 'document'
+  if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(ext)) return 'archive'
+  if (['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'cs', 'php', 'rb', 'go', 'rs', 'html', 'css', 'scss', 'json', 'xml', 'yaml', 'yml'].includes(ext)) return 'code'
+  return 'other'
+}

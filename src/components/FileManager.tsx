@@ -6,6 +6,8 @@ import FileList from './FileList'
 import UploadModal from './UploadModal'
 import { useBuckets } from '../hooks/useBuckets'
 import { useFiles } from '../hooks/useFiles'
+import { createFolder, createEmptyFile } from '../services/fileService'
+import toast from 'react-hot-toast'
 
 const FileManager = () => {
   const navigate = useNavigate()
@@ -40,6 +42,34 @@ const FileManager = () => {
     refetchFiles()
   }
 
+  const handleCreateFolder = async () => {
+    const name = window.prompt('Enter folder name:')
+    if (!name) return
+    try {
+      const key = currentPath + name + '/'
+      await createFolder(currentBucket, key)
+      refetchFiles()
+      toast.success(`Created folder ${name}`)
+    } catch (error) {
+      toast.error('Failed to create folder')
+      console.error('Create folder error:', error)
+    }
+  }
+
+  const handleCreateFile = async () => {
+    const name = window.prompt('Enter file name:')
+    if (!name) return
+    try {
+      const key = currentPath + name
+      await createEmptyFile(currentBucket, key)
+      refetchFiles()
+      toast.success(`Created file ${name}`)
+    } catch (error) {
+      toast.error('Failed to create file')
+      console.error('Create file error:', error)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
@@ -57,6 +87,20 @@ const FileManager = () => {
               />
             </div>
             <div className="flex items-center space-x-2">
+              <button
+                onClick={handleCreateFile}
+                className="btn btn-outline"
+                disabled={!currentBucket}
+              >
+                Create File
+              </button>
+              <button
+                onClick={handleCreateFolder}
+                className="btn btn-outline"
+                disabled={!currentBucket}
+              >
+                Create Folder
+              </button>
               <button
                 onClick={() => setShowUploadModal(true)}
                 className="btn btn-primary"
@@ -93,6 +137,8 @@ const FileManager = () => {
               loading={filesLoading}
               onPathChange={handlePathChange}
               onRefresh={refetchFiles}
+              bucket={currentBucket}
+              currentPath={currentPath}
             />
           </div>
         </div>
