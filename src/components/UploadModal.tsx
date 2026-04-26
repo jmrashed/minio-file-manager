@@ -14,7 +14,7 @@ interface UploadModalProps {
 const UploadModal = ({ bucket, path, onClose, onUploadComplete }: UploadModalProps) => {
   const [files, setFiles] = useState<File[]>([])
 
-  const uploadMutation = useUpload()
+  const { queueUploads } = useUpload()
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     setFiles(prev => [...prev, ...acceptedFiles])
@@ -32,7 +32,7 @@ const UploadModal = ({ bucket, path, onClose, onUploadComplete }: UploadModalPro
   const handleUpload = async () => {
     if (files.length === 0) return
 
-    await uploadMutation.mutateAsync({
+    queueUploads({
       bucket,
       files,
       path,
@@ -120,7 +120,7 @@ const UploadModal = ({ bucket, path, onClose, onUploadComplete }: UploadModalPro
                     <button
                       onClick={() => removeFile(index)}
                       className="text-gray-400 hover:text-red-600 dark:hover:text-red-400 ml-2"
-                      disabled={uploadMutation.isPending}
+                      disabled={false}
                     >
                       <XMarkIcon className="h-5 w-5" />
                     </button>
@@ -136,16 +136,15 @@ const UploadModal = ({ bucket, path, onClose, onUploadComplete }: UploadModalPro
           <button
             onClick={onClose}
             className="btn btn-outline"
-            disabled={uploadMutation.isPending}
           >
             Cancel
           </button>
           <button
             onClick={handleUpload}
-            disabled={files.length === 0 || uploadMutation.isPending}
+            disabled={files.length === 0}
             className="btn btn-primary"
           >
-            {uploadMutation.isPending ? 'Uploading...' : `Upload ${files.length} File${files.length !== 1 ? 's' : ''}`}
+            {`Queue ${files.length} File${files.length !== 1 ? 's' : ''}`}
           </button>
         </div>
       </div>

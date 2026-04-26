@@ -3,6 +3,7 @@ import { devtools } from 'zustand/middleware'
 
 export interface UploadQueueItem {
   id: string
+  bucket: string
   file: File
   key: string
   progress: number
@@ -11,7 +12,7 @@ export interface UploadQueueItem {
   uploadedBytes: number
   totalBytes: number
   error?: string
-  abortController?: AbortController
+  xhr?: XMLHttpRequest | null
 }
 
 export interface DownloadProgress {
@@ -79,10 +80,24 @@ interface AppState {
   setSort: (by: 'name' | 'date' | 'size' | 'type', order: 'asc' | 'desc') => void
   filterBy: string
   setFilterBy: (filter: string) => void
+  theme: 'light' | 'dark'
+  setTheme: (theme: 'light' | 'dark') => void
+  toggleTheme: () => void
 }
 
 let uploadIdCounter = 0
 export const generateUploadId = (): string => `upload-${++uploadIdCounter}-${Date.now()}`
+
+const getInitialTheme = (): 'light' | 'dark' => {
+  if (typeof window === 'undefined') return 'light'
+
+  const savedTheme = window.localStorage.getItem('theme')
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    return savedTheme
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
 
 export const useAppStore = create<AppState>()(
   devtools(
@@ -97,6 +112,7 @@ export const useAppStore = create<AppState>()(
       sortBy: 'name',
       sortOrder: 'asc',
       filterBy: 'all',
+      theme: getInitialTheme(),
 
       setSelectedFiles: (files) => set({ selectedFiles: files }),
 
@@ -146,12 +162,19 @@ export const useAppStore = create<AppState>()(
       pauseUpload: (id) =>
         set((state) => {
           const item = state.uploadQueue.find((i) => i.id === id)
-          if (item?.abortController) {
-            item.abortController.abort()
+          if (item?.xhr) {
+            item.xhr.abort()
           }
           return {
             uploadQueue: state.uploadQueue.map((item) =>
-              item.id === id ? { ...item, status: 'paused' as const } : item
+              item.id === id
+                ? {
+                    ...item,
+                    status: 'paused' as const,
+                    xhr: null,
+                    speed: 0,
+                  }
+                : item
             ),
           }
         }),
@@ -159,7 +182,17 @@ export const useAppStore = create<AppState>()(
       resumeUpload: (id) =>
         set((state) => ({
           uploadQueue: state.uploadQueue.map((item) =>
-            item.id === id ? { ...item, status: 'pending' as const } : item
+            item.id === id
+              ? {
+                  ...item,
+                  status: 'pending' as const,
+                  progress: 0,
+                  uploadedBytes: 0,
+                  speed: 0,
+                  error: undefined,
+                  xhr: null,
+                }
+              : item
           ),
         })),
 
@@ -188,8 +221,12 @@ export const useAppStore = create<AppState>()(
       setSort: (sortBy, sortOrder) => set({ sortBy, sortOrder }),
 
       setFilterBy: (filterBy) => set({ filterBy }),
+
+      setTheme: (theme) => set({ theme }),
+
+      toggleTheme: () =>
+        set((state) => ({ theme: state.theme === 'dark' ? 'light' : 'dark' })),
     }),
     { name: 'app-store' }
   )
 )
-

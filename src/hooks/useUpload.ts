@@ -1,48 +1,133 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { uploadFile } from '../services/fileService'
-import toast from 'react-hot-toast'
+import { getPresignedUploadUrl } from '../services/fileService'
+import { generateUploadId, useAppStore, UploadQueueItem } from '../store/appStore'
 
-interface UploadParams {
+interface QueueUploadParams {
   bucket: string
   files: File[]
   path?: string
 }
 
 export const useUpload = () => {
-  const queryClient = useQueryClient()
+  const addToUploadQueue = useAppStore((state) => state.addToUploadQueue)
 
-  return useMutation({
-    mutationFn: async ({ bucket, files, path = '' }: UploadParams) => {
-      const uploadPromises = files.map(async (file) => {
-        const relativePath = (file as any).webkitRelativePath || file.name
-        const fileKey = path ? `${path}${relativePath}` : relativePath
+  const queueUploads = ({ bucket, files, path = '' }: QueueUploadParams) => {
+    const items: UploadQueueItem[] = files.map((file) => {
+      const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+      const key = path ? `${path}${relativePath}` : relativePath
 
-        try {
-          await uploadFile(bucket, fileKey, file)
-          return fileKey
-        } catch (error) {
-          console.error(`Failed to upload ${file.name}:`, error)
-          throw error
-        }
+      return {
+        id: generateUploadId(),
+        bucket,
+        file,
+        key,
+        progress: 0,
+        status: 'pending',
+        speed: 0,
+        uploadedBytes: 0,
+        totalBytes: file.size,
+        xhr: null,
+      }
+    })
+
+    addToUploadQueue(items)
+    return items.length
+  }
+
+  return {
+    queueUploads,
+  }
+}
+
+export const startUploadRequest = async (
+  item: UploadQueueItem,
+  onProgress: (updates: Partial<UploadQueueItem>) => void
+): Promise<void> => {
+  const url = await getPresignedUploadUrl(item.bucket, item.key)
+
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    const startedAt = Date.now()
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable) return
+
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.1)
+      const uploadedBytes = event.loaded
+      onProgress({
+        uploadedBytes,
+        totalBytes: event.total,
+        progress: Math.round((uploadedBytes / Math.max(event.total, 1)) * 100),
+        speed: uploadedBytes / elapsedSeconds,
       })
+    })
 
-      const results = await Promise.allSettled(uploadPromises)
-      const successful = results.filter(result => result.status === 'fulfilled').length
-      const failed = results.filter(result => result.status === 'rejected').length
-
-      if (failed > 0) {
-        throw new Error(`Upload completed with ${successful} success and ${failed} failures`)
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress({
+          xhr: null,
+          progress: 100,
+          uploadedBytes: item.file.size,
+          totalBytes: item.file.size,
+          speed: 0,
+          status: 'completed',
+        })
+        resolve()
+        return
       }
 
-      return successful
-    },
-    onSuccess: (data, { bucket, path }) => {
-      queryClient.invalidateQueries({ queryKey: ['files', bucket, path] })
-      toast.success(`Successfully uploaded ${data} file${data !== 1 ? 's' : ''}`)
-    },
-    onError: (error) => {
-      console.error('Upload error:', error)
-      toast.error(error instanceof Error ? error.message : 'Upload failed')
-    },
+      onProgress({
+        xhr: null,
+        status: 'error',
+        speed: 0,
+        error: `Upload failed with status ${xhr.status}`,
+      })
+      reject(new Error(`Upload failed with status ${xhr.status}`))
+    })
+
+    xhr.addEventListener('error', () => {
+      onProgress({
+        xhr: null,
+        status: 'error',
+        speed: 0,
+        error: 'Network error during upload',
+      })
+      reject(new Error('Network error during upload'))
+    })
+
+    xhr.addEventListener('abort', () => {
+      const currentItem = useAppStore.getState().uploadQueue.find((queueItem) => queueItem.id === item.id)
+
+      if (currentItem?.status === 'paused') {
+        onProgress({
+          xhr: null,
+          speed: 0,
+        })
+        resolve()
+        return
+      }
+
+      onProgress({
+        xhr: null,
+        status: 'error',
+        speed: 0,
+        error: 'Upload was cancelled',
+      })
+      reject(new Error('Upload was cancelled'))
+    })
+
+    xhr.open('PUT', url)
+
+    if (item.file.type) {
+      xhr.setRequestHeader('Content-Type', item.file.type)
+    }
+
+    onProgress({
+      xhr,
+      status: 'uploading',
+      error: undefined,
+      speed: 0,
+    })
+
+    xhr.send(item.file)
   })
 }

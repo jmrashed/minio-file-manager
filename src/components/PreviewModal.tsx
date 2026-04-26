@@ -1,7 +1,21 @@
 import { useState, useEffect } from 'react'
 import { XMarkIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline'
-import { FileObject, getPresignedDownloadUrl } from '../services/fileService'
-import { isImageFile, isVideoFile, isAudioFile, isTextFile, formatFileSize, formatDateTime } from '../utils/formatters'
+import {
+  FileObject,
+  downloadFileWithProgress,
+  fetchTextFileContent,
+  getPresignedDownloadUrl,
+} from '../services/fileService'
+import {
+  isAudioFile,
+  isImageFile,
+  isPdfFile,
+  isTextFile,
+  isVideoFile,
+  formatFileSize,
+  formatDateTime,
+} from '../utils/formatters'
+import { useAppStore } from '../store/appStore'
 
 interface PreviewModalProps {
   file: FileObject | null
@@ -11,8 +25,10 @@ interface PreviewModalProps {
 
 const PreviewModal = ({ file, bucket, onClose }: PreviewModalProps) => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [textContent, setTextContent] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const setDownloadProgress = useAppStore((state) => state.setDownloadProgress)
 
   useEffect(() => {
     if (!file) return
@@ -20,11 +36,17 @@ const PreviewModal = ({ file, bucket, onClose }: PreviewModalProps) => {
     const loadPreview = async () => {
       setLoading(true)
       setError(null)
+      setTextContent(null)
 
       try {
-        // Generate a presigned URL for secure access to the object
-        const url = await getPresignedDownloadUrl(bucket, file.key)
-        setPreviewUrl(url)
+        if (isTextFile(file.name)) {
+          const content = await fetchTextFileContent(bucket, file.key)
+          setTextContent(content)
+          setPreviewUrl(null)
+        } else {
+          const url = await getPresignedDownloadUrl(bucket, file.key)
+          setPreviewUrl(url)
+        }
       } catch (err) {
         setError('Failed to load preview')
       } finally {
@@ -33,21 +55,54 @@ const PreviewModal = ({ file, bucket, onClose }: PreviewModalProps) => {
     }
 
     loadPreview()
-  }, [file])
+  }, [bucket, file])
 
   if (!file) return null
 
   const handleDownload = async () => {
     try {
-      const downloadUrl = await getPresignedDownloadUrl(bucket, file.key)
-      const link = document.createElement('a')
-      link.href = downloadUrl
-      link.download = file.name
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
+      setDownloadProgress(file.key, {
+        key: file.key,
+        name: file.name,
+        progress: 0,
+        status: 'downloading',
+        speed: 0,
+        downloadedBytes: 0,
+        totalBytes: 0,
+      })
+
+      await downloadFileWithProgress(bucket, file.key, file.name, (progress) => {
+        setDownloadProgress(file.key, {
+          key: file.key,
+          name: file.name,
+          progress: progress.progress,
+          status: 'downloading',
+          speed: progress.speed,
+          downloadedBytes: progress.loaded,
+          totalBytes: progress.total,
+        })
+      })
+
+      setDownloadProgress(file.key, {
+        key: file.key,
+        name: file.name,
+        progress: 100,
+        status: 'completed',
+        speed: 0,
+        downloadedBytes: file.size,
+        totalBytes: file.size,
+      })
     } catch (error) {
       console.error('Failed to generate download URL:', error)
+      setDownloadProgress(file.key, {
+        key: file.key,
+        name: file.name,
+        progress: 0,
+        status: 'error',
+        speed: 0,
+        downloadedBytes: 0,
+        totalBytes: file.size,
+      })
     }
   }
 
@@ -72,6 +127,16 @@ const PreviewModal = ({ file, bucket, onClose }: PreviewModalProps) => {
               Download File
             </button>
           </div>
+        </div>
+      )
+    }
+
+    if (isTextFile(file.name)) {
+      return (
+        <div className="max-h-[60vh] overflow-y-auto rounded-lg bg-gray-50 p-4 dark:bg-gray-900">
+          <pre className="whitespace-pre-wrap break-words text-sm text-gray-900 dark:text-gray-100">
+            {textContent || 'This file is empty.'}
+          </pre>
         </div>
       )
     }
@@ -104,6 +169,16 @@ const PreviewModal = ({ file, bucket, onClose }: PreviewModalProps) => {
       )
     }
 
+    if (isPdfFile(file.name)) {
+      return (
+        <iframe
+          src={previewUrl}
+          title={file.name}
+          className="h-[70vh] w-full rounded-lg border border-gray-200 dark:border-gray-700"
+        />
+      )
+    }
+
     if (isAudioFile(file.name)) {
       return (
         <div className="flex justify-center">
@@ -114,17 +189,6 @@ const PreviewModal = ({ file, bucket, onClose }: PreviewModalProps) => {
           >
             Your browser does not support the audio tag.
           </audio>
-        </div>
-      )
-    }
-
-    if (isTextFile(file.name)) {
-      return (
-        <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg max-h-96 overflow-y-auto">
-          <pre className="text-sm text-gray-900 dark:text-gray-100 whitespace-pre-wrap">
-            {/* In a real implementation, you'd fetch and display the text content */}
-            Preview not available for text files. Please download to view.
-          </pre>
         </div>
       )
     }

@@ -95,6 +95,10 @@ export const isTextFile = (fileName: string): boolean => {
   return extension ? textExtensions.includes(extension) : false
 }
 
+export const isPdfFile = (fileName: string): boolean => {
+  return fileName.split('.').pop()?.toLowerCase() === 'pdf'
+}
+
 export const getFileType = (fileName: string, type: string): string => {
   if (type === 'folder') return 'folder'
   const ext = fileName.split('.').pop()?.toLowerCase() || ''

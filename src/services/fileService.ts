@@ -27,6 +27,13 @@ export interface BucketInfo {
   creationDate?: Date
 }
 
+interface TransferProgress {
+  loaded: number
+  total: number
+  speed: number
+  progress: number
+}
+
 // Bucket operations
 export const listBuckets = async (): Promise<BucketInfo[]> => {
   const client = getS3Client()
@@ -254,15 +261,97 @@ export const getObjectUrl = (bucket: string, key: string): string => {
   return `${protocol}://${credentials.endpoint}:${credentials.port}/${bucket}/${key}`
 }
 
-export const downloadAsZip = async (bucket: string, keys: string[], zipName: string): Promise<void> => {
+const fetchBlobWithProgress = async (
+  url: string,
+  onProgress?: (progress: TransferProgress) => void
+): Promise<Blob> => {
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error(`Download failed with status ${response.status}`)
+  }
+
+  if (!response.body) {
+    return response.blob()
+  }
+
+  const total = Number(response.headers.get('content-length') || 0)
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let loaded = 0
+  const startedAt = Date.now()
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    if (value) {
+      chunks.push(value)
+      loaded += value.length
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.1)
+      const speed = loaded / elapsedSeconds
+      onProgress?.({
+        loaded,
+        total,
+        speed,
+        progress: total > 0 ? Math.round((loaded / total) * 100) : 0,
+      })
+    }
+  }
+
+  return new Blob(chunks.map((chunk) => chunk.slice().buffer))
+}
+
+export const fetchTextFileContent = async (bucket: string, key: string): Promise<string> => {
+  const url = await getPresignedDownloadUrl(bucket, key)
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error(`Failed to load text preview (${response.status})`)
+  }
+
+  return response.text()
+}
+
+export const downloadFileWithProgress = async (
+  bucket: string,
+  key: string,
+  fileName: string,
+  onProgress?: (progress: TransferProgress) => void
+): Promise<void> => {
+  const url = await getPresignedDownloadUrl(bucket, key)
+  const blob = await fetchBlobWithProgress(url, onProgress)
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(link.href)
+}
+
+export const downloadAsZip = async (
+  bucket: string,
+  keys: string[],
+  zipName: string,
+  onProgress?: (progress: TransferProgress) => void
+): Promise<void> => {
   const zip = new JSZip()
+  const totalFiles = keys.length
+  let completedFiles = 0
 
   for (const key of keys) {
     const url = await getPresignedDownloadUrl(bucket, key)
-    const response = await fetch(url)
-    const blob = await response.blob()
+    const blob = await fetchBlobWithProgress(url)
     const fileName = key.split('/').pop() || key
     zip.file(fileName, blob)
+    completedFiles += 1
+    onProgress?.({
+      loaded: completedFiles,
+      total: totalFiles,
+      speed: 0,
+      progress: Math.round((completedFiles / Math.max(totalFiles, 1)) * 100),
+    })
   }
 
   const zipBlob = await zip.generateAsync({ type: 'blob' })
@@ -272,10 +361,15 @@ export const downloadAsZip = async (bucket: string, keys: string[], zipName: str
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
+  URL.revokeObjectURL(link.href)
 }
 
-export const downloadFolderAsZip = async (bucket: string, folderKey: string): Promise<void> => {
+export const downloadFolderAsZip = async (
+  bucket: string,
+  folderKey: string,
+  onProgress?: (progress: TransferProgress) => void
+): Promise<void> => {
   const objects = await listAllObjectKeys(bucket, folderKey)
   const folderName = folderKey.split('/').slice(-2)[0] || 'folder'
-  await downloadAsZip(bucket, objects, `${folderName}.zip`)
+  await downloadAsZip(bucket, objects, `${folderName}.zip`, onProgress)
 }

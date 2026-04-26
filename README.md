@@ -2,6 +2,8 @@
 
 A React + Vite frontend for browsing and managing files in a MinIO or other S3-compatible object store directly from the browser.
 
+![MinIO File Manager demo](./demo.png)
+
 ## Current Status
 
 This README reflects the code currently in this repository as of April 27, 2026.
@@ -18,15 +20,17 @@ This README reflects the code currently in this repository as of April 27, 2026.
 
 - Login screen for entering MinIO endpoint, port, access key, secret key, and SSL preference
 - Client-side session persistence via `localStorage`
-- Bucket listing and bucket switching
+- Bucket listing, bucket switching, bucket creation, and bucket deletion for empty buckets
 - Folder navigation with breadcrumbs
 - File and folder listing for the current bucket path
 - Create empty files
 - Create folders
 - Multi-file upload through a modal with drag-and-drop support
-- Single-file download
+- Upload queue with progress, pause, resume, error state, and completion state
+- Single-file download with progress tracking
 - Bulk download of selected items as a ZIP archive
 - Folder download as a ZIP archive
+- Download progress panel
 - Single and bulk delete
 - Recursive delete for folders by prefix
 - Rename files and folders
@@ -37,24 +41,24 @@ This README reflects the code currently in this repository as of April 27, 2026.
 - Sorting by name, date, size, and type
 - Grid and list views
 - Multi-select with checkboxes
+- Context menu for file and folder actions
 - Keyboard shortcuts for `Delete`, `Ctrl/Cmd+A`, `F2`, and `Esc`
-- Preview modal for images, video, and audio files
+- Preview modal for images, video, audio, text, and PDF files
+- Dark mode toggle
+- Incremental file loading with automatic and manual “load more” behavior
 
 ### Partially Implemented
 
-- Text file preview: the modal opens, but text content is not fetched or rendered yet
-- Preview actions in the UI: dedicated preview buttons are shown for images and videos, while other file types open the preview modal when the row/card itself is clicked
+- Upload queue persistence: transfers are visible in-app, but they do not survive a full page reload
+- Download progress accuracy for ZIP-style downloads is file-count based rather than byte-accurate
 - Environment configuration: `.env` files exist, but the runtime connection is driven by the login form rather than env values
 
 ### Not Implemented In The UI
 
-- Bucket creation UI
-- Bucket deletion UI
-- Context menu UI, even though context-menu state exists in the store
-- Upload progress UI, pause/resume UI, and download progress UI
-- Pagination/infinite scrolling for large object listings
-- PDF-specific inline preview
-- Dark mode toggle
+- Cross-bucket paste/move
+- True multipart uploads for very large files
+- Server-side/global search across all bucket contents
+- Upload retry controls
 
 ## Authentication And Connection Model
 
@@ -81,17 +85,20 @@ This means the browser must be able to reach your MinIO server directly, and you
 | Area | Status | Notes |
 | --- | --- | --- |
 | Authentication | Working, client-side only | Credentials are stored locally and are not validated before redirecting to the file manager |
-| Bucket management | Partial | Listing and switching buckets work; create/delete bucket functions exist in the service layer but are not wired into the UI |
-| File upload | Working | Upload modal supports multiple files and drag-and-drop |
-| File download | Working | Single download, selected ZIP download, and folder ZIP download are implemented |
+| Bucket management | Working with limits | Listing, switching, creation, and deletion are available; deleting a bucket only works when it is empty |
+| File upload | Working with limits | Upload modal, queue, progress, and pause/resume are available; uploads are single-request browser uploads rather than multipart transfers |
+| File download | Working | Single download, selected ZIP download, folder ZIP download, and transfer progress UI are implemented |
 | File delete | Working | Single and bulk delete are available; folder deletion resolves object keys by prefix |
 | File rename | Working | Implemented with copy-then-delete |
 | Move / copy / cut / paste | Working with limits | Implemented within the same bucket; cross-bucket paste is blocked |
 | Create folder / file | Working | Prompt-based UI in the main header |
 | Search | Working | Client-side filtering within the currently loaded folder only |
-| Preview | Partial | Images, video, and audio preview inline; text shows a fallback message; PDFs fall back to download |
+| Preview | Working | Images, video, audio, text, and PDF files can be previewed in the modal |
 | Breadcrumbs | Working | Bucket root and nested folder navigation are implemented |
 | Grid / list view | Working | Toggle is in the file toolbar |
+| Context menu | Working | Right-click actions are available for files and folders |
+| Theme toggle | Working | Light/dark mode is toggled in the header |
+| Pagination | Working | Incremental loading is implemented through `useInfiniteQuery` plus automatic/manual load-more behavior |
 
 ## Project Structure
 
@@ -108,17 +115,18 @@ src/
 │   ├── FileList.tsx               # Main file browser, search, sorting, actions, grid/list rendering
 │   ├── FileManager.tsx            # Main authenticated screen and layout
 │   ├── Login.tsx                  # Connection form for MinIO credentials
-│   ├── PreviewModal.tsx           # Preview modal for images, video, audio, and fallback states
+│   ├── PreviewModal.tsx           # Preview modal for images, video, audio, text, and PDF files
+│   ├── TransferPanel.tsx          # Upload/download progress panel with queue controls
 │   └── UploadModal.tsx            # Drag-and-drop upload modal
 ├── hooks/
 │   ├── useBuckets.ts              # React Query hook for bucket listing
-│   ├── useFiles.ts                # React Query hook for object listing
-│   └── useUpload.ts               # Upload mutation and success/error toasts
+│   ├── useFiles.ts                # Infinite query hook for paginated object listing
+│   └── useUpload.ts               # Upload queue helpers and upload request runner
 ├── services/
-│   ├── fileService.ts             # S3/MinIO bucket and object operations
+│   ├── fileService.ts             # S3/MinIO bucket, object, preview, and transfer helpers
 │   └── minioClient.ts             # Browser-side S3 client creation from localStorage credentials
 ├── store/
-│   └── appStore.ts                # Zustand store for selection, view mode, clipboard, and planned progress state
+│   └── appStore.ts                # Zustand store for selection, theme, clipboard, context menu, and transfer state
 └── utils/
     ├── formatters.ts              # File type detection and date/size formatting
     └── validators.ts              # Validation helpers not currently wired into the UI
@@ -136,6 +144,7 @@ There is currently no `public/` directory in this repository.
 .eslintrc.cjs      # ESLint configuration
 .gitignore         # Git ignore rules
 CHANGELOG.md       # Project changelog
+demo.png           # Demo image used in the README
 index.html         # Vite HTML entry
 jest.config.js     # Jest configuration
 package.json       # Scripts and dependencies
@@ -283,15 +292,13 @@ This succeeds in the current codebase.
 
 - Credentials are stored in `localStorage`, so this is not suitable as-is for high-security or multi-user production use
 - The login screen does not verify credentials before redirecting
-- Bucket creation and deletion exist only in the service layer, not in the UI
+- Bucket deletion only succeeds when the bucket is empty
 - Search is client-side and only applies to the currently loaded folder
-- Object listing does not expose pagination in the UI, so very large folders may be incomplete
-- Text file preview does not render file contents yet
-- PDF preview is not implemented
-- Dedicated preview buttons are only shown for images and videos
-- Upload progress, pause/resume, and download-progress state exist conceptually in the store but are not surfaced in the UI
-- Context menu state exists in the store, but no context menu is rendered
-- Dark-mode classes exist in the styling, but there is no built-in theme toggle
+- Large folders still depend on repeated paginated loading instead of a virtualized list
+- Cross-bucket paste is intentionally blocked
+- Uploads use single browser PUT requests rather than multipart upload, so very large files may be less resilient
+- Upload/download transfer state is in-memory only and resets on full page refresh
+- ZIP download progress is approximate because it tracks per-file completion rather than archive byte generation
 - The production bundle still triggers a Vite chunk-size warning for the main JavaScript bundle
 - Automated tests are not currently runnable without fixing the Jest environment setup
 
@@ -321,8 +328,17 @@ Current preview support is limited:
 - images: inline preview
 - video: inline preview
 - audio: inline preview
-- text: fallback message only
-- PDF and other file types: download fallback
+- text: fetched and rendered in the modal
+- PDF: rendered inline in an `iframe`
+- other file types: download fallback
+
+### Bucket Deletion Fails
+
+Bucket deletion is wired into the UI now, but MinIO/S3 will reject deletion when the bucket still contains objects. Empty the bucket first, then retry.
+
+### Transfer Panel Resets After Refresh
+
+Current upload and download progress is tracked in app state only. Reloading the page clears the visible queue even though already-finished uploads/downloads remain in storage.
 
 ### `npm test` Fails Immediately
 
@@ -368,6 +384,10 @@ Pre-signed download URLs are generated client-side with `@aws-sdk/s3-request-pre
 
 ## Screenshots
 
+Current demo image included in the repository:
+
+![Current demo view](./demo.png)
+
 Add screenshots for these existing UI surfaces when available:
 
 - `Login` screen
@@ -376,8 +396,10 @@ Add screenshots for these existing UI surfaces when available:
 - `Breadcrumb`
 - `FileList` grid view
 - `FileList` list view
+- `FileList` context menu
 - `UploadModal`
 - `PreviewModal`
+- `TransferPanel`
 
 ## Development Notes
 
