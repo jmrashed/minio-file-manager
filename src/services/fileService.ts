@@ -7,9 +7,11 @@ import {
   DeleteObjectsCommand,
   CreateBucketCommand,
   DeleteBucketCommand,
+  CopyObjectCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { getS3Client } from './minioClient'
+import JSZip from 'jszip'
 
 export interface FileObject {
   key: string
@@ -114,6 +116,32 @@ export const uploadFile = async (
   await client.send(command)
 }
 
+const listAllObjectKeys = async (bucket: string, prefix: string): Promise<string[]> => {
+  const client = getS3Client()
+  const keys: string[] = []
+  let continuationToken: string | undefined
+
+  do {
+    const response = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      })
+    )
+
+    for (const obj of response.Contents || []) {
+      if (obj.Key) {
+        keys.push(obj.Key)
+      }
+    }
+
+    continuationToken = response.NextContinuationToken
+  } while (continuationToken)
+
+  return keys
+}
+
 export const deleteObject = async (bucket: string, key: string): Promise<void> => {
   const client = getS3Client()
   const command = new DeleteObjectCommand({
@@ -125,13 +153,72 @@ export const deleteObject = async (bucket: string, key: string): Promise<void> =
 
 export const deleteObjects = async (bucket: string, keys: string[]): Promise<void> => {
   const client = getS3Client()
-  const command = new DeleteObjectsCommand({
+  const allKeysToDelete: string[] = []
+
+  for (const key of keys) {
+    if (key.endsWith('/')) {
+      // It's a folder, get all objects with prefix
+      const objects = await listAllObjectKeys(bucket, key)
+      allKeysToDelete.push(...objects)
+    } else {
+      allKeysToDelete.push(key)
+    }
+  }
+
+  if (allKeysToDelete.length > 0) {
+    const command = new DeleteObjectsCommand({
+      Bucket: bucket,
+      Delete: {
+        Objects: allKeysToDelete.map(key => ({ Key: key })),
+      },
+    })
+    await client.send(command)
+  }
+}
+
+export const createFolder = async (bucket: string, key: string): Promise<void> => {
+  const client = getS3Client()
+  const command = new PutObjectCommand({
     Bucket: bucket,
-    Delete: {
-      Objects: keys.map(key => ({ Key: key })),
-    },
+    Key: key,
+    Body: '', // Empty body for folder
   })
   await client.send(command)
+}
+
+export const createEmptyFile = async (bucket: string, key: string): Promise<void> => {
+  const client = getS3Client()
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: '',
+  })
+  await client.send(command)
+}
+
+export const copyFile = async (bucket: string, sourceKey: string, destKey: string): Promise<void> => {
+  const client = getS3Client()
+  const command = new CopyObjectCommand({
+    Bucket: bucket,
+    CopySource: `${bucket}/${sourceKey}`,
+    Key: destKey,
+  })
+  await client.send(command)
+}
+
+export const renameFile = async (bucket: string, oldKey: string, newKey: string): Promise<void> => {
+  const client = getS3Client()
+
+  // Copy to new key
+  const copyCommand = new CopyObjectCommand({
+    Bucket: bucket,
+    CopySource: `${bucket}/${oldKey}`,
+    Key: newKey,
+  })
+  await client.send(copyCommand)
+
+  // Delete old key
+  await deleteObject(bucket, oldKey)
 }
 
 // Pre-signed URLs
@@ -165,4 +252,30 @@ export const getObjectUrl = (bucket: string, key: string): string => {
   const credentials = JSON.parse(localStorage.getItem('minio-credentials') || '{}')
   const protocol = credentials.useSSL ? 'https' : 'http'
   return `${protocol}://${credentials.endpoint}:${credentials.port}/${bucket}/${key}`
+}
+
+export const downloadAsZip = async (bucket: string, keys: string[], zipName: string): Promise<void> => {
+  const zip = new JSZip()
+
+  for (const key of keys) {
+    const url = await getPresignedDownloadUrl(bucket, key)
+    const response = await fetch(url)
+    const blob = await response.blob()
+    const fileName = key.split('/').pop() || key
+    zip.file(fileName, blob)
+  }
+
+  const zipBlob = await zip.generateAsync({ type: 'blob' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(zipBlob)
+  link.download = zipName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
+export const downloadFolderAsZip = async (bucket: string, folderKey: string): Promise<void> => {
+  const objects = await listAllObjectKeys(bucket, folderKey)
+  const folderName = folderKey.split('/').slice(-2)[0] || 'folder'
+  await downloadAsZip(bucket, objects, `${folderName}.zip`)
 }
